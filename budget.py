@@ -14,6 +14,26 @@ def split(income: float, needs_pct: int, wants_pct: int) -> dict:
             "save": income * save_pct / 100, "save_pct": save_pct}
 
 
+def suggest(income: float, expenses: float) -> dict:
+    """A split built from the person's real numbers instead of a generic 50/30/20."""
+    if income <= 0:
+        return {"needs": 50, "wants": 30, "note": "Enter your income to get a personal split."}
+    needs = int(round(min(max(expenses / income * 100, 0), 95))) if expenses > 0 else 50
+    left = 100 - needs
+    save = min(20, left) if left >= 20 else left // 2
+    wants = max(left - save, 0)
+    if expenses <= 0:
+        note = "Using the standard 50/30/20. Add monthly expenses in 👤 My profile for a personal split."
+    elif needs > 80:
+        note = (f"Your needs already take {needs}% of your income, so there is very little room. Raising "
+                "income or lowering fixed costs matters more than anything else right now.")
+    elif needs > 50:
+        note = f"Your needs take {needs}% of income (above the usual 50%), so wants are trimmed to protect savings."
+    else:
+        note = f"Your needs take only {needs}% of income, so you have room to save the full 20% or more."
+    return {"needs": needs, "wants": wants, "note": note}
+
+
 def future_value(monthly: float, annual_rate: float, years: int) -> list[float]:
     """Balance at the end of each year when investing `monthly` every month."""
     r = annual_rate / 100 / 12
@@ -35,7 +55,8 @@ def months_to_fill(target: float, have: float, monthly: float) -> int | None:
 
 
 def render(profile: dict | None):
-    st.subheader("💰 Budget planner (50/30/20)")
+    title_slot = st.empty()   # filled in below once your split is known
+    title_slot.subheader("💰 Budget planner")
     st.caption("A common budgeting rule of thumb: about 50% of take-home pay for needs, 30% for wants, "
                "and 20% for saving and investing. Adjust it to fit your life. Pure math, nothing is sent "
                "anywhere, and this is not financial advice.")
@@ -47,17 +68,23 @@ def render(profile: dict | None):
     savings_now = c2.number_input("Savings you already have ($)", min_value=0.0, step=100.0,
                                   value=float(p.get("current_savings") or 0.0), key="bud_have")
 
-    st.markdown("**Your target split**")
+    expenses = float(p.get("monthly_expenses") or 0.0)
+    sug = suggest(income, expenses)
+    st.markdown("**Your target split** (starts from your own numbers, then adjust)")
+    st.caption("💡 " + sug["note"])
+    ver = f"{int(income)}_{int(expenses)}"   # sliders reset when your income or expenses change
     s1, s2 = st.columns(2)
-    needs_pct = s1.slider("Needs % (rent, food, bills, transport)", 0, 100, 50, key="bud_needs")
+    needs_pct = s1.slider("Needs % (rent, food, bills, transport)", 0, 100, sug["needs"], key=f"bud_needs_{ver}")
     wants_pct = s2.slider("Wants % (eating out, fun, subscriptions)", 0, 100 - needs_pct,
-                          min(30, 100 - needs_pct), key="bud_wants")
+                          min(sug["wants"], 100 - needs_pct), key=f"bud_wants_{ver}")
     plan = split(income, needs_pct, wants_pct)
+    title_slot.subheader(f"💰 Budget planner ({needs_pct}/{wants_pct}/{plan['save_pct']})")
     st.caption(f"Saving & investing gets the rest: **{plan['save_pct']}%**")
 
     st.markdown("**What you actually spend each month (optional)**")
     a1, a2 = st.columns(2)
-    act_needs = a1.number_input("Actual needs ($)", min_value=0.0, step=50.0, value=0.0, key="bud_act_needs")
+    act_needs = a1.number_input("Actual needs ($)", min_value=0.0, step=50.0, value=expenses,
+                                key=f"bud_act_needs_{int(expenses)}")
     act_wants = a2.number_input("Actual wants ($)", min_value=0.0, step=50.0, value=0.0, key="bud_act_wants")
     has_actual = act_needs + act_wants > 0
     act_save = max(income - act_needs - act_wants, 0.0)
