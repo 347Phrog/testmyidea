@@ -9,9 +9,10 @@ Setup (Google AI Studio, default):
         GEMMA_JSON_MODE=0
     (.env is in .gitignore, so it never gets pushed. `export` in the terminal also still works.)
 
-Backup (local Ollama):
-    pip install ollama ; ollama pull <gemma tag>
-    export GEMMA_BACKEND=ollama ; export OLLAMA_MODEL=<that tag>
+Local Gemma (Ollama):
+    curl -fsSL https://ollama.com/install.sh | sh ; ollama pull gemma4:e2b ; pip install ollama
+    .env: GEMMA_FALLBACK=ollama   -> AI Studio first, local Gemma if it rate-limits or fails
+          GEMMA_BACKEND=ollama    -> local only
 
 Contents:
     1. Strategy parser   -> parse_strategy("buy apple when it drops 3%...")
@@ -39,7 +40,10 @@ except ImportError:
 
 BACKEND = os.getenv("GEMMA_BACKEND", "studio")                    # "studio" or "ollama"
 STUDIO_MODEL = os.getenv("GEMMA_MODEL", "gemma-4-26b-a4b-it")     # or "gemma-4-31b-it" (bigger, slower)
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:4b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")            # small local Gemma 4; "gemma4:e4b" if you have the RAM
+FALLBACK_TO_LOCAL = os.getenv("GEMMA_FALLBACK", "").lower() == "ollama"   # use local Gemma when AI Studio fails
+LOCAL_TIMEOUT_S = int(os.getenv("GEMMA_LOCAL_TIMEOUT", "180"))
+LAST_BACKEND = None  # which engine answered the most recent call ("AI Studio" or "local"), for the UI
 CACHE_DIR = "cache"
 
 DISCLAIMER = (
@@ -53,6 +57,9 @@ DISCLAIMER = (
 # =====================================================================
 _client = None
 _studio_json_mode = os.getenv("GEMMA_JSON_MODE", "1") != "0"  # flips off automatically if the API rejects JSON-schema mode for Gemma
+THINKING_LEVEL = os.getenv("GEMMA_THINKING", "minimal")       # "minimal" = thinking off (fast); "high" = slower, more careful
+_studio_thinking = THINKING_LEVEL.lower() not in ("", "none", "default")
+TIMEOUT_S = int(os.getenv("GEMMA_TIMEOUT", "60"))
 
 
 def _studio_generate(system_prompt: str, user_text: str, schema: type[BaseModel]) -> str:
@@ -60,24 +67,28 @@ def _studio_generate(system_prompt: str, user_text: str, schema: type[BaseModel]
     from google import genai
     from google.genai import types
 
+    global _studio_thinking
     if _client is None:
-        _client = genai.Client()  # reads GEMINI_API_KEY (or GOOGLE_API_KEY)
+        # reads GEMINI_API_KEY; the timeout (ms) stops a slow call from hanging forever
+        _client = genai.Client(http_options=types.HttpOptions(timeout=TIMEOUT_S * 1000))
 
-    for attempt in range(4):
+    for attempt in range(2 if FALLBACK_TO_LOCAL else 4):   # fail over to local sooner when fallback is on
         try:
+            kwargs = dict(system_instruction=system_prompt, temperature=0)
+            if _studio_thinking:
+                # Thinking off = much faster. These are simple extraction tasks; examples do the work.
+                kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=THINKING_LEVEL)
             if _studio_json_mode:
-                config = types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=0,
-                    response_mime_type="application/json",
-                    response_json_schema=schema.model_json_schema(),
-                )
-            else:
-                config = types.GenerateContentConfig(system_instruction=system_prompt, temperature=0)
+                kwargs.update(response_mime_type="application/json",
+                              response_json_schema=schema.model_json_schema())
+            config = types.GenerateContentConfig(**kwargs)
             resp = _client.models.generate_content(model=STUDIO_MODEL, contents=user_text, config=config)
             return resp.text or ""
         except Exception as e:
             msg = str(e)
+            if _studio_thinking and "thinking" in msg.lower():
+                _studio_thinking = False                        # model rejected the thinking setting: drop it
+                continue
             if _studio_json_mode and any(k in msg for k in ("400", "INVALID_ARGUMENT", "500", "INTERNAL")):
                 _studio_json_mode = False                       # Gemma may not accept JSON mode: use prompt-only
                 continue
@@ -90,13 +101,39 @@ def _studio_generate(system_prompt: str, user_text: str, schema: type[BaseModel]
 
 def _ollama_generate(system_prompt: str, user_text: str, schema: type[BaseModel]) -> str:
     import ollama
-    resp = ollama.chat(
+    client = ollama.Client(timeout=LOCAL_TIMEOUT_S)
+    kwargs = dict(
         model=OLLAMA_MODEL,
         messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
         format=schema.model_json_schema(),
         options={"temperature": 0},
     )
+    try:
+        resp = client.chat(**kwargs, think=False)   # thinking off = faster on a CPU
+    except TypeError:                                # older ollama package without `think`
+        resp = client.chat(**kwargs)
     return resp["message"]["content"]
+
+
+def _generate(system_prompt: str, user_text: str, schema: type[BaseModel]) -> str:
+    """AI Studio first; if it fails (rate limit, outage, timeout) and fallback is on, use local Gemma."""
+    global LAST_BACKEND
+    if BACKEND == "ollama":
+        LAST_BACKEND = "local"
+        return _ollama_generate(system_prompt, user_text, schema)
+    try:
+        out = _studio_generate(system_prompt, user_text, schema)
+        LAST_BACKEND = "AI Studio"
+        return out
+    except Exception as studio_err:
+        if not FALLBACK_TO_LOCAL:
+            raise
+        try:
+            out = _ollama_generate(system_prompt, user_text, schema)
+            LAST_BACKEND = "local"
+            return out
+        except Exception as local_err:
+            raise RuntimeError(f"AI Studio failed ({studio_err}) and local Gemma failed ({local_err})")
 
 
 def _extract_json(raw: str) -> str:
@@ -106,7 +143,7 @@ def _extract_json(raw: str) -> str:
 
 
 def call_gemma(system_prompt: str, user_text: str, schema: type[BaseModel], retries: int = 2):
-    generate = _ollama_generate if BACKEND == "ollama" else _studio_generate
+    generate = _generate
     prompt, last_err = user_text, None
     for _ in range(retries + 1):
         raw = generate(system_prompt, prompt, schema)
@@ -361,8 +398,9 @@ if __name__ == "__main__":
         "get into nvidia when rsi is under 30, take profit at 10 percent",
         "buy coke when the CEO goes on TV",
     ]:
+        t0 = time.time()
         s = parse_strategy(q)
-        print(q, "\n  ->", s.readback, "| supported:", s.supported,
+        print(f"[{time.time() - t0:.1f}s]", q, "\n  ->", s.readback, "| supported:", s.supported,
               "" if s.supported else f"| reason: {s.unsupported_reason}", "\n")
 
     # Warm the cache for demo tickers so the demo survives bad wifi
@@ -372,7 +410,9 @@ if __name__ == "__main__":
         except Exception as e:
             print("cache failed for", tk, e)
 
+    t0 = time.time()
     snap, rep = evaluate_profiles("KO")
+    print(f"[profiles took {time.time() - t0:.1f}s]")
     print(json.dumps(snap, indent=2))
     for v in rep.views:
         print(f"{v.profile}: {v.fit} | {v.reasons} | risk: {v.key_risk}")

@@ -4,3 +4,5 @@ yfinance
 pandas
 numpy
 streamlit
+python-dotenv
+ollama
