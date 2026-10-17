@@ -9,11 +9,16 @@ import streamlit as st
 
 import assistant
 import backtest as bt
+import branding
 import gemma_core as gc
 import insights
 import user_profile as up
 
-st.set_page_config(page_title="TestMyIdea", page_icon="📈", layout="wide")
+try:
+    st.set_page_config(page_title="TestMyIdea", page_icon=branding.icon_bytes(), layout="wide")
+except Exception:
+    st.set_page_config(page_title="TestMyIdea", page_icon="📈", layout="wide")
+branding.apply_branding()
 
 FIT_COLOR = {"Strong fit": "green", "Mixed": "orange", "Poor fit": "red"}
 EXAMPLES = [
@@ -278,6 +283,9 @@ def render_home():
             st.caption("Try it: go to 🔍 Evaluate a stock, enter a ticker, then click "
                        f"\"Test {name} style\".")
 
+    with st.expander("🎨 Color schemes"):
+        branding.color_display()
+
     with st.expander("📊 How the signal score works"):
         st.markdown(
             "- **Price history (−1 to +1):** average of trend vs. the 200-day average, 6-month momentum, "
@@ -410,7 +418,10 @@ CHAT_SUGGESTIONS = [
 
 
 # ---------------------------------------------------------------------
-st.title("📈 TestMyIdea")
+try:
+    branding.header()
+except Exception:
+    st.title("📈 TestMyIdea")
 st.write("Type a trading idea in plain English. See how it would have done **before** you risk real money.")
 st.caption(f"Powered by Gemma ({gc.STUDIO_MODEL if gc.BACKEND != 'ollama' else gc.OLLAMA_MODEL})")
 
