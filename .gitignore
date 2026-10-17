@@ -2,8 +2,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-*.json 
-*.csv
 # Secrets: never commit API keys
 .env
 *.key
