@@ -10,6 +10,7 @@ import streamlit as st
 import assistant
 import backtest as bt
 import branding
+import budget
 import gemma_core as gc
 import insights
 import user_profile as up
@@ -425,8 +426,14 @@ except Exception:
 st.write("Type a trading idea in plain English. See how it would have done **before** you risk real money.")
 st.caption(f"Powered by Gemma ({gc.STUDIO_MODEL if gc.BACKEND != 'ollama' else gc.OLLAMA_MODEL})")
 
-tab_home, tab0, tab1, tab2, tab_me = st.tabs(
-    ["🏠 Home", "💬 Ask", "🧪 Test an idea", "🔍 Evaluate a stock", "👤 My profile"])
+tab_home, tab0, tab1, tab2, tab_me, tab_budget = st.tabs(
+    ["🏠 Home", "💬 Ask", "🧪 Test an idea", "🔍 Evaluate a stock", "👤 My profile", "💰 Budget"])
+
+with tab_budget:
+    try:
+        budget.render(current_profile())
+    except Exception as e:  # never let the budget page break the rest of the app
+        st.error(f"Budget page error: {e}")
 
 with tab_me:
     try:

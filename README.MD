@@ -31,6 +31,7 @@ New investors trade on gut rules like *"buy the dip"* or *"sell after a pump"*, 
 | 🔍 **Evaluate a stock** | See how four investing styles rate a stock (citing real numbers), test each style's rule, and get a 0–100 signal score |
 | 👤 **My profile** | Income, expenses, savings goal, and a risk quiz. Shows your savings pace, emergency-fund check, matching styles, and a max-per-stock guardrail used across the app |
 | 🎨 **Color schemes** | Six themes with a live color display |
+| 💰 **Budget** | 50/30/20 planner, target vs. actual spending, emergency-fund timeline, and how monthly savings could compound over time (illustrative) |
 
 ## How Gemma 4 is used
 
