@@ -1,0 +1,6 @@
+google-genai
+pydantic
+yfinance
+pandas
+numpy
+streamlit
