@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+ 
+# Secrets: never commit API keys
+.env
+*.key
+ 
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
+ 
+# Streamlit secrets
+.streamlit/secrets.toml
+
