@@ -11,6 +11,7 @@ import assistant
 import backtest as bt
 import gemma_core as gc
 import insights
+import user_profile as up
 
 st.set_page_config(page_title="TestMyIdea", page_icon="📈", layout="wide")
 
@@ -70,6 +71,15 @@ def show_results(strategy: gc.Strategy, key: str):
 
     st.line_chart(pd.concat([res["equity"], res["buy_hold"]], axis=1), y_label="Portfolio value ($)")
 
+    mine = current_profile()
+    if mine:
+        cap = up.summarize(mine)["max_per_stock"]
+        if cap > 0:
+            end = cap * (1 + m["strategy_return_pct"] / 100)
+            bh_end = cap * (1 + m["buy_hold_return_pct"] / 100)
+            st.caption(f"👤 With your max-per-stock amount (${cap:,.0f}), this strategy would have ended at "
+                       f"**${end:,.0f}** vs **${bh_end:,.0f}** buying and holding.")
+
     if m["num_trades"] < 20:
         st.warning(f"Only {m['num_trades']} trades: too few to trust this result much.")
 
@@ -102,7 +112,9 @@ def render_profiles(tk: str, snap: dict, report: dict, key: str, buttons: bool =
     cols = st.columns(4)
     for col, v in zip(cols, report["views"]):
         with col:
-            st.markdown(f"#### {v['profile']}")
+            mine = current_profile()
+            star = " ⭐" if mine and v["profile"] in up.summarize(mine)["styles"] else ""
+            st.markdown(f"#### {v['profile']}{star}")
             st.markdown(f":{FIT_COLOR[v['fit']]}[**{v['fit']}**]")
             for r in v["reasons"]:
                 st.markdown(f"- {r}")
@@ -110,6 +122,8 @@ def render_profiles(tk: str, snap: dict, report: dict, key: str, buttons: bool =
             if buttons and st.button(f"Test {v['profile']} style", key=f"style_{key}_{v['profile']}"):
                 st.session_state["style_test"] = v["profile"]
     st.write(f"**Summary:** {report['one_line_summary']}")
+    if current_profile():
+        st.caption("⭐ = matches the risk level in your profile")
     st.info(gc.DISCLAIMER)
 
 
@@ -172,6 +186,217 @@ def render_payload(m: dict, key: str):
         st.error(f"Couldn't display this result: {e}")
 
 
+PROFILE_GUIDE = {
+    "Value": {
+        "icon": "🏷️",
+        "tagline": "Buy good businesses when they're on sale.",
+        "mindset": "Value investors look for stocks priced below what the business is really worth. "
+                   "They're patient, comfortable buying what others are selling, and willing to wait years "
+                   "for the market to notice. The approach goes back to Benjamin Graham and was made famous "
+                   "by Warren Buffett.",
+        "looks_for": ["Low price-to-earnings (P/E), roughly under 18",
+                      "Price well below its 52-week high (bought on a dip, not a peak)",
+                      "Steady, understandable businesses"],
+        "avoids": ["Expensive \"story\" stocks with high P/E", "Buying after a big run-up"],
+        "risk": "A cheap stock can stay cheap, or get cheaper, if the business is actually declining "
+                "(a \"value trap\").",
+        "rule": "Buy when it looks oversold (RSI under 30), hold 1 month.",
+    },
+    "Growth": {
+        "icon": "🚀",
+        "tagline": "Pay up for companies growing fast.",
+        "mindset": "Growth investors care most about how fast a company's sales and earnings are rising. "
+                   "They accept high prices and big price swings, betting that rapid growth will justify "
+                   "today's valuation.",
+        "looks_for": ["Revenue growth above about 15% a year",
+                      "Expanding markets and new products",
+                      "Willingness to accept a high P/E and high volatility"],
+        "avoids": ["Slow-growing, mature companies", "Businesses with shrinking sales"],
+        "risk": "If growth slows even a little, high-priced stocks can fall sharply.",
+        "rule": "Buy when price crosses above its 200-day average, hold 6 months.",
+    },
+    "Income": {
+        "icon": "💵",
+        "tagline": "Get paid to wait.",
+        "mindset": "Income investors want steady cash from dividends and a smooth ride. They prefer "
+                   "stable, established companies over exciting ones, and they value sleeping well at "
+                   "night over big wins.",
+        "looks_for": ["Dividend yield above about 2.5%",
+                      "Low volatility (annual swings under about 25%)",
+                      "Beta under 1 (moves less than the overall market)"],
+        "avoids": ["Companies that pay no dividend", "Wild, unpredictable price swings"],
+        "risk": "Dividends can be cut, and slow-growing stocks can lag the market for years.",
+        "rule": "Buy after a 5% weekly dip, hold 3 months.",
+    },
+    "Momentum": {
+        "icon": "📈",
+        "tagline": "Ride what's already working.",
+        "mindset": "Momentum investors follow the trend: stocks that have risen tend to keep rising for a "
+                   "while. They don't need a story about why. They watch price action and get out "
+                   "quickly when the trend breaks.",
+        "looks_for": ["1-year return above about 15%",
+                      "Price within 10% of its 52-week high",
+                      "A clear uptrend"],
+        "avoids": ["Stocks in a downtrend", "Holding losers and hoping they recover"],
+        "risk": "Trends reverse suddenly. Momentum strategies can give back gains fast in a sell-off.",
+        "rule": "Buy when price crosses above its 50-day average, exit at +10% or −5%.",
+    },
+}
+
+
+def render_home():
+    st.subheader("Welcome to TestMyIdea")
+    st.write("Most new investors trade on gut rules like *\"buy the dip\"* without ever testing them. "
+             "TestMyIdea lets you test any idea in one sentence, and shows how different kinds of "
+             "investors would look at a stock, using real data.")
+    c1, c2, c3 = st.columns(3)
+    c1.markdown("**💬 Ask**  \nChat about any stock: price, signal score, or which style it suits.")
+    c2.markdown("**🧪 Test an idea**  \nType a trading rule in plain English and see how it would "
+                "have performed vs. just holding.")
+    c3.markdown("**🔍 Evaluate a stock**  \nSee how four investing styles rate a stock, plus a "
+                "0–100 signal score.")
+
+    st.divider()
+    st.subheader("How each investing style thinks")
+    st.caption("These are the same rules Gemma uses when it rates a stock in the app.")
+    tabs = st.tabs([f"{g['icon']} {name}" for name, g in PROFILE_GUIDE.items()])
+    for tab, (name, g) in zip(tabs, PROFILE_GUIDE.items()):
+        with tab:
+            st.markdown(f"### {g['icon']} {name}: *{g['tagline']}*")
+            st.write(g["mindset"])
+            a, b = st.columns(2)
+            with a:
+                st.markdown("**✅ Looks for**")
+                for x in g["looks_for"]:
+                    st.markdown(f"- {x}")
+            with b:
+                st.markdown("**🚫 Avoids**")
+                for x in g["avoids"]:
+                    st.markdown(f"- {x}")
+            st.markdown(f"**⚠️ Main risk:** {g['risk']}")
+            st.markdown(f"**🧪 Rule we test for this style:** {g['rule']}")
+            st.caption("Try it: go to 🔍 Evaluate a stock, enter a ticker, then click "
+                       f"\"Test {name} style\".")
+
+    with st.expander("📊 How the signal score works"):
+        st.markdown(
+            "- **Price history (−1 to +1):** average of trend vs. the 200-day average, 6-month momentum, "
+            "distance from the 52-week high, and volatility.\n"
+            "- **News sentiment (−1 to +1):** Gemma scores recent headlines, and we average them.\n"
+            "- **Score = 50 + 25 × history + 25 × sentiment.** 60+ leans favorable, 40 or below leans "
+            "unfavorable.\n\n"
+            "It describes recent conditions. It does not predict the future.")
+    st.info("TestMyIdea is an educational tool using historical data. It is not financial advice. "
+            "Every decision is yours.")
+
+
+
+def current_profile():
+    if "user_profile" not in st.session_state:
+        st.session_state["user_profile"] = up.load()
+    return st.session_state["user_profile"]
+
+
+def render_my_profile():
+    st.subheader("👤 My profile")
+    st.caption("🔒 Saved only on this computer (user_profile.json). It is never sent to Gemma or any "
+               "server, and every calculation here is plain math.")
+    p = current_profile() or dict(up.DEFAULTS)
+
+    with st.form("profile_form"):
+        st.markdown("**Money basics (monthly, after taxes)**")
+        c1, c2, c3 = st.columns(3)
+        name = c1.text_input("First name (optional)", value=p["name"])
+        income = c2.number_input("Monthly income ($)", min_value=0.0, step=100.0, value=float(p["monthly_income"]))
+        expenses = c3.number_input("Monthly expenses ($)", min_value=0.0, step=100.0, value=float(p["monthly_expenses"]))
+
+        st.markdown("**Savings goal**")
+        g1, g2, g3, g4 = st.columns(4)
+        savings = g1.number_input("Current savings ($)", min_value=0.0, step=100.0, value=float(p["current_savings"]))
+        goal_name = g2.text_input("Goal", value=p["goal_name"])
+        goal_amount = g3.number_input("Goal amount ($)", min_value=0.0, step=500.0, value=float(p["goal_amount"]))
+        default_date = pd.Timestamp(p["goal_date"]).date() if p.get("goal_date") else None
+        goal_date = g4.date_input("Target date (optional)", value=default_date)
+
+        st.markdown("**Risk quiz**")
+        answers = []
+        for i, (q, opts) in enumerate(up.RISK_QUESTIONS):
+            idx = int(p["risk_answers"][i]) if i < len(p["risk_answers"]) else 1
+            choice = st.radio(q, opts, index=idx, key=f"riskq{i}", horizontal=True)
+            answers.append(opts.index(choice))
+
+        st.markdown("**Guardrails**")
+        h1, h2 = st.columns(2)
+        max_pct = h1.slider("Max % of investable money in any one stock", 1, 50, int(p["max_pct_per_stock"]))
+        favs = h2.text_input("Watchlist tickers (comma separated)", value=p["favorite_tickers"])
+
+        saved = st.form_submit_button("💾 Save profile", type="primary")
+
+    if saved:
+        new = {"name": name.strip(), "monthly_income": income, "monthly_expenses": expenses,
+               "current_savings": savings, "goal_name": goal_name.strip() or "Savings goal",
+               "goal_amount": goal_amount, "goal_date": goal_date.isoformat() if goal_date else None,
+               "risk_answers": answers, "max_pct_per_stock": max_pct,
+               "favorite_tickers": favs.upper()}
+        up.save(new)
+        st.session_state["user_profile"] = new
+        st.success("Saved on this computer.")
+        p = new
+
+    if not current_profile():
+        st.info("Fill this in and save to get a personal snapshot, your matching investing style, "
+                "and position-size guardrails across the app.")
+        return
+
+    s = up.summarize(p)
+    st.divider()
+    st.subheader(f"Your snapshot{', ' + p['name'] if p['name'] else ''}")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Left over each month", f"${s['surplus']:,.0f}")
+    m2.metric("Savings rate", f"{s['savings_rate']:.0f}%")
+    m3.metric("Risk level", s["risk_level"], f"{s['risk_total']}/6 on the quiz", delta_color="off")
+    m4.metric("Styles that fit you", " & ".join(s["styles"]))
+
+    # Goal progress
+    goal = float(p["goal_amount"])
+    if goal > 0:
+        pct = min(float(p["current_savings"]) / goal, 1.0)
+        st.markdown(f"**🎯 {p['goal_name']}: ${float(p['current_savings']):,.0f} of ${goal:,.0f}**")
+        st.progress(pct)
+        if s["remaining"] == 0:
+            st.success("Goal reached!")
+        elif s["months_at_current_pace"] is None:
+            st.warning("You're not saving anything each month yet, so this goal can't be reached at the "
+                       "current pace. Lowering expenses or raising income is the first step.")
+        else:
+            line = f"At your current pace (${s['surplus']:,.0f}/month) you'll get there in about " \
+                   f"**{s['months_at_current_pace']} months**."
+            if s["needed_per_month"] is not None:
+                line += f" To hit your target date ({s['months_left']} months away) you need " \
+                        f"**${s['needed_per_month']:,.0f}/month**: " + \
+                        ("✅ you're on track." if s["on_track"] else "⚠️ you're behind that pace.")
+            st.markdown(line)
+
+    # Emergency fund + investable money
+    if float(p["monthly_expenses"]) > 0:
+        if s["emergency_ok"]:
+            st.success(f"✅ Emergency fund covered: you have at least 3 months of expenses "
+                       f"(${s['emergency_target']:,.0f}) saved.")
+        else:
+            st.warning(f"⚠️ A common rule of thumb is to keep 3 months of expenses "
+                       f"(${s['emergency_target']:,.0f}) as an emergency fund before investing.")
+    st.markdown(f"**Money beyond your emergency fund:** ${s['investable']:,.0f} · "
+                f"**Your max per stock ({p['max_pct_per_stock']}%):** ${s['max_per_stock']:,.0f}")
+    st.caption("These are general rules of thumb for education, not financial advice. The "
+               "\"styles that fit you\" are starred on the Evaluate tab, and backtests show what your "
+               "max-per-stock amount would have become.")
+
+    if st.button("🗑️ Delete my profile", key="del_profile"):
+        up.delete()
+        st.session_state["user_profile"] = None
+        st.rerun()
+
+
 CHAT_SUGGESTIONS = [
     "Does Nvidia look good right now?",
     "What if I bought Apple every time it dropped 3%?",
@@ -185,7 +410,17 @@ st.title("📈 TestMyIdea")
 st.write("Type a trading idea in plain English. See how it would have done **before** you risk real money.")
 st.caption(f"Powered by Gemma ({gc.STUDIO_MODEL if gc.BACKEND != 'ollama' else gc.OLLAMA_MODEL})")
 
-tab0, tab1, tab2 = st.tabs(["💬 Ask", "🧪 Test an idea", "🔍 Evaluate a stock"])
+tab_home, tab0, tab1, tab2, tab_me = st.tabs(
+    ["🏠 Home", "💬 Ask", "🧪 Test an idea", "🔍 Evaluate a stock", "👤 My profile"])
+
+with tab_me:
+    try:
+        render_my_profile()
+    except Exception as e:  # never let the profile page break the rest of the app
+        st.error(f"Profile page error: {e}")
+
+with tab_home:
+    render_home()
 
 # ---------------- TAB 0: chat ----------------
 with tab0:
