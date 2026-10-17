@@ -1,4 +1,4 @@
-![TestMyIdea](logo/logo_wordmark.png)
+![TestMyIdea](logo/logo_wordmark.svg)
 
 # TestMyIdea
 
