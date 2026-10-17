@@ -38,6 +38,15 @@ try:
 except ImportError:
     pass
 
+# On Streamlit Community Cloud, settings live in "Secrets"; copy them into the environment
+try:
+    import streamlit as _st
+    for _k, _v in dict(_st.secrets).items():
+        if isinstance(_v, (str, int, float)):
+            os.environ.setdefault(_k, str(_v))
+except Exception:
+    pass
+
 BACKEND = os.getenv("GEMMA_BACKEND", "studio")                    # "studio" or "ollama"
 STUDIO_MODEL = os.getenv("GEMMA_MODEL", "gemma-4-26b-a4b-it")     # or "gemma-4-31b-it" (bigger, slower)
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")            # small local Gemma 4; "gemma4:e4b" if you have the RAM

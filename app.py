@@ -299,8 +299,12 @@ def current_profile():
 
 def render_my_profile():
     st.subheader("👤 My profile")
-    st.caption("🔒 Saved only on this computer (user_profile.json). It is never sent to Gemma or any "
-               "server, and every calculation here is plain math.")
+    if up.PERSIST:
+        st.caption("🔒 Saved only on this computer (user_profile.json). It is never sent to Gemma or any "
+                   "server, and every calculation here is plain math.")
+    else:
+        st.caption("🔒 Kept only in your browser session and cleared when you close the tab. It is "
+                   "never saved on the server or sent to Gemma, and every calculation here is plain math.")
     p = current_profile() or dict(up.DEFAULTS)
 
     with st.form("profile_form"):
@@ -340,7 +344,7 @@ def render_my_profile():
                "favorite_tickers": favs.upper()}
         up.save(new)
         st.session_state["user_profile"] = new
-        st.success("Saved on this computer.")
+        st.success("Saved on this computer." if up.PERSIST else "Saved for this session.")
         p = new
 
     if not current_profile():

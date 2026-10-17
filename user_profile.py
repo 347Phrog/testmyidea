@@ -12,6 +12,12 @@ from datetime import date
 
 PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_profile.json")
 
+# "file"    = save to user_profile.json (running on your own computer)
+# "session" = keep only in the browser session (REQUIRED on a public server like Streamlit Cloud,
+#             otherwise every visitor would share one profile file)
+STORAGE = os.getenv("PROFILE_STORAGE", "file").lower()
+PERSIST = STORAGE == "file"
+
 RISK_QUESTIONS = [
     ("If your investments dropped 20% in one month, you would…",
      ["Sell to stop the losses", "Wait it out", "Buy more while it's cheap"]),
@@ -29,6 +35,8 @@ DEFAULTS = {
 
 
 def load() -> dict | None:
+    if not PERSIST:
+        return None
     try:
         with open(PATH) as f:
             return {**DEFAULTS, **json.load(f)}
@@ -37,12 +45,14 @@ def load() -> dict | None:
 
 
 def save(profile: dict) -> None:
+    if not PERSIST:
+        return
     with open(PATH, "w") as f:
         json.dump(profile, f, indent=2, default=str)
 
 
 def delete() -> None:
-    if os.path.exists(PATH):
+    if PERSIST and os.path.exists(PATH):
         os.remove(PATH)
 
 
