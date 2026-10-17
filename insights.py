@@ -73,25 +73,110 @@ def _parse_item(item: dict) -> dict | None:
     date = c.get("pubDate") or ""
     if not date and c.get("providerPublishTime"):
         date = datetime.fromtimestamp(c["providerPublishTime"], tz=timezone.utc).isoformat()
-    return {"title": title.strip(), "publisher": pub, "date": str(date)[:10]}
+    related = c.get("relatedTickers") or item.get("relatedTickers") or []
+    return {"title": title.strip(), "publisher": pub, "date": str(date)[:10],
+            "_related": [str(t).upper() for t in related]}
+
+
+def _from_yf_ticker(ticker: str) -> list[dict]:
+    return [h for h in (_parse_item(i) for i in (yf.Ticker(ticker).news or [])) if h]
+
+
+def _from_yf_search(ticker: str) -> list[dict]:
+    res = yf.Search(ticker, news_count=10)
+    return [h for h in (_parse_item(i) for i in (getattr(res, "news", None) or [])) if h]
+
+
+def _parse_rss(xml_text: str) -> list[dict]:
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+    out = []
+    for item in ET.fromstring(xml_text).iter("item"):
+        title = (item.findtext("title") or "").strip()
+        if not title:
+            continue
+        src = (item.findtext("source") or "").strip()
+        if src and title.endswith(" - " + src):          # Google News appends " - Publisher"
+            title = title[: -len(" - " + src)]
+        try:
+            date = parsedate_to_datetime(item.findtext("pubDate")).date().isoformat()
+        except Exception:
+            date = ""
+        out.append({"title": title, "publisher": src, "date": date})
+    return out
+
+
+def _from_google_news(ticker: str) -> list[dict]:
+    import urllib.parse
+    import urllib.request
+    url = ("https://news.google.com/rss/search?q=" + urllib.parse.quote(f"{ticker} stock")
+           + "&hl=en-US&gl=US&ceid=US:en")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        return _parse_rss(r.read().decode("utf-8", "ignore"))
+
+
+NEWS_SOURCES = [("Yahoo Finance", _from_yf_ticker), ("Yahoo search", _from_yf_search),
+                ("Google News", _from_google_news)]
+LAST_NEWS_SOURCE = None
+MIN_RELEVANT = 3
+
+
+def _company_words(ticker: str) -> list[str]:
+    """Words that identify the company in a headline, e.g. NVDA -> ['nvda', 'nvidia']."""
+    words = [ticker.lower()]
+    try:
+        with open(os.path.join(CACHE_DIR, f"{ticker}.json")) as f:
+            name = json.load(f).get("name", "")
+        first = name.replace(",", " ").split()[0].lower() if name else ""
+        if len(first) >= 3 and first not in ("the", "inc", "corp"):
+            words.append(first.rstrip("."))
+    except Exception:
+        pass
+    return words
+
+
+def _relevant(items: list[dict], ticker: str) -> list[dict]:
+    words = _company_words(ticker)
+    keep = []
+    for h in items:
+        title = h["title"].lower()
+        if any(w in title.split() or w in title for w in words):
+            keep.append(h)
+    return keep
 
 
 def get_headlines(ticker: str, n: int = 10) -> list[dict]:
+    """Try each source in order; first one with headlines wins. Falls back to the saved copy."""
+    global LAST_NEWS_SOURCE
     ticker = ticker.upper()
     path = os.path.join(CACHE_DIR, f"{ticker}_news.json")
-    try:
-        items = [h for h in (_parse_item(i) for i in (yf.Ticker(ticker).news or [])) if h]
+    for name, fetch in NEWS_SOURCES:
+        try:
+            items = fetch(ticker)
+        except Exception:
+            continue
+        if name != "Google News":            # Google News is already a targeted search
+            items = _relevant(items, ticker)  # drop headlines about other companies
         items = sorted(items, key=lambda h: h.get("date") or "", reverse=True)[:n]   # newest first
-        if items:
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            with open(path, "w") as f:
-                json.dump(items, f)
+        for h in items:
+            h.pop("_related", None)
+        if len(items) >= MIN_RELEVANT:
+            LAST_NEWS_SOURCE = name
+            for h in items:
+                h.setdefault("source", name)
+            try:
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(path, "w") as f:
+                    json.dump(items, f)
+            except Exception:
+                pass
             return items
-    except Exception:
-        pass
     if os.path.exists(path):
+        LAST_NEWS_SOURCE = "saved copy"
         with open(path) as f:
             return json.load(f)
+    LAST_NEWS_SOURCE = None
     return []
 
 
