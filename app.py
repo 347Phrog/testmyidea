@@ -134,9 +134,17 @@ def render_signal(sig: dict):
         else:
             st.markdown(f"**📰 News sentiment: {sent['score']:+.2f}** ({sent['n']} headlines, scored by Gemma)")
             st.caption(sent["summary"])
-            with st.expander("See each headline's score"):
-                st.dataframe(pd.DataFrame(sent["headlines"])[["score", "title", "publisher", "date"]],
-                             hide_index=True)
+            latest = sorted(sent["headlines"], key=lambda h: h.get("date") or "", reverse=True)
+            st.markdown("**Latest headlines**")
+            for h in latest[:3]:
+                tone = "🟢" if h["score"] > 0.15 else "🔴" if h["score"] < -0.15 else "⚪"
+                meta = " · ".join(x for x in (h.get("publisher"), h.get("date")) if x)
+                st.markdown(f"{tone} **{h['score']:+.2f}** {h['title']}  \n<small>{meta}</small>",
+                            unsafe_allow_html=True)
+            if len(latest) > 3:
+                with st.expander(f"All {len(latest)} headlines"):
+                    st.dataframe(pd.DataFrame(latest)[["score", "title", "publisher", "date"]],
+                                 hide_index=True)
     st.info("This summarizes recent price trends and news tone. It is not a prediction or "
             "financial advice. Past trends and headlines don't guarantee future returns. "
             "The decision is yours.")

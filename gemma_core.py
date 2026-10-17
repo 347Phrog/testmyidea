@@ -29,7 +29,7 @@ from typing import List, Literal, Optional
 
 import numpy as np
 import yfinance as yf
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 # Load settings from a .env file next to this script, if present (never committed: it's in .gitignore)
 try:
@@ -81,6 +81,10 @@ def _studio_generate(system_prompt: str, user_text: str, schema: type[BaseModel]
             if _studio_json_mode:
                 kwargs.update(response_mime_type="application/json",
                               response_json_schema=schema.model_json_schema())
+            else:
+                kwargs["system_instruction"] = (
+                    system_prompt + "\n\nYour reply must be a single JSON object matching this JSON Schema "
+                    "exactly (same field names and nesting):\n" + json.dumps(schema.model_json_schema()))
             config = types.GenerateContentConfig(**kwargs)
             resp = _client.models.generate_content(model=STUDIO_MODEL, contents=user_text, config=config)
             return resp.text or ""
@@ -319,6 +323,21 @@ class ProfileReport(BaseModel):
     views: List[ProfileView] = Field(min_length=4, max_length=4)
     one_line_summary: str
 
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_keyed_layout(cls, data):
+        """Gemma sometimes returns {"Value": {...}, "Growth": {...}, ...} instead of a views list."""
+        if not isinstance(data, dict) or "views" in data:
+            return data
+        names = ["Value", "Growth", "Income", "Momentum"]
+        lower = {str(k).lower(): v for k, v in data.items()}
+        if all(n.lower() in lower for n in names):
+            views = [{**lower[n.lower()], "profile": n} for n in names if isinstance(lower[n.lower()], dict)]
+            summary = (data.get("one_line_summary") or data.get("summary")
+                       or lower.get("one_line_summary") or "")
+            return {"views": views, "one_line_summary": summary}
+        return data
+
 
 # Thresholds are rough rules of thumb, stated so Gemma's reasoning is consistent and explainable.
 PROFILE_PROMPT = """You describe how well a stock FITS four investing styles.
@@ -337,6 +356,11 @@ RULES
 - Exactly 2 reasons per style, each under 20 words. One key_risk under 20 words.
 - Return all four styles in this order: Value, Growth, Income, Momentum.
 - one_line_summary: which styles this stock suits best and least, in one sentence.
+
+SHAPE (exactly this structure):
+{"views": [{"profile": "Value", "fit": "Mixed", "reasons": ["...", "..."], "key_risk": "..."},
+           {"profile": "Growth", ...}, {"profile": "Income", ...}, {"profile": "Momentum", ...}],
+ "one_line_summary": "..."}
 
 Return only JSON."""
 
